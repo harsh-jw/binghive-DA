@@ -1,0 +1,251 @@
+# DDL
+
+create database binghive;
+
+use binghive;
+
+drop table if exists device_details;
+
+create table device_details
+( device_id int primary key,
+  name varchar(255),
+  screen_size varchar(255),
+  os_version varchar(255),
+  ram varchar(255),
+  battery varchar(255),
+  chipset varchar(255)
+);
+
+load data infile 'C:\\ProgramData\\MySQL\\MySQL Server 8.1\\Uploads\\device_details.csv'
+into table device_details
+fields terminated by ','
+enclosed by '"'
+lines terminated by '\n'
+ignore 1 rows;
+
+drop table if exists users_activity_log;
+
+create table users_activity_log
+( 	user_id int,
+	occurred_at text,
+	event_name varchar(255),
+	os varchar(255),
+	os_version int,
+	device_id int
+);
+
+load data infile 'C:\\ProgramData\\MySQL\\MySQL Server 8.1\\Uploads\\users_activity_log.csv'
+into table users_activity_log
+fields terminated by ','
+enclosed by '"'
+lines terminated by '\n'
+ignore 1 rows;
+
+
+#DML
+
+set sql_safe_updates = 0;
+
+update users_activity_log
+set occurred_at = date_format(str_to_date(occurred_at, '%d-%m-%Y %H:%i'), '%Y-%m-%d');
+
+alter table users_activity_log
+modify column occurred_at date;
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- TASK 1 In what percent of sessions is search being used? (Consider a sequence of activities done by a user without a 10-minute break between any two activities 
+-- as one session. If there's a gap of more than 10 minutes between a new activity and previous activity, consider the new activity to be in a new session.)
+
+-- counting total number of sessions ANSWER - 32786
+select COUNT(*) as total_sessions
+from (
+    select user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10) AS session_id
+    from users_activity_log
+    group by user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10)
+	order by user_id
+) sessions;
+
+select user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10) AS session_id
+from users_activity_log
+group by user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10)
+order by user_id;
+
+-- count of number of sessions with search activity ANSWER - 12055
+with SessionData as (
+    select user_id,
+           FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10) AS session_id
+    from users_activity_log
+    where event_name = 'run_query'
+    group by user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10)
+    )
+
+select count(*) as search_sessions
+from SessionData;
+
+-- calculate the percentage of sessions with search activity ANSWER - 36.77%
+select (search_sessions / total_sessions) * 100 AS search_usage_percentage
+from (
+    select COUNT(*) as total_sessions
+		from (
+				select user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10) AS session_id
+				from users_activity_log
+				group by user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10)
+			 ) sessions
+) total,
+( with SessionData as (
+		select user_id,
+			FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10) AS session_id
+		from users_activity_log
+		where event_name = 'run_query'
+		group by user_id, FLOOR(UNIX_TIMESTAMP(occurred_at) / 60 / 10)
+)
+	select count(*) as search_sessions
+	from SessionData
+) search;
+
+-- ANSWER - 36.77% of the time search is being used in a session
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- TASK 2 Are users able to find what they search for?
+
+-- Calculate clickthrough rate for search results
+
+-- gives total searches
+select user_id, count(event_name) as total_search_events
+from users_activity_log
+where event_name = 'run_query'
+group by user_id
+order by user_id asc;
+
+-- gives total clicks on results
+select user_id, count(event_name) as total_result_clicks
+from users_activity_log
+where event_name in ('query_result_1', 'query_result_2', 'query_result_3', 'query_result_4', 'query_result_5', 'query_result_6', 'query_result_7', 'query_result_8', 'query_result_9')
+group by user_id
+order by user_id asc;
+
+select t1.user_id, t1.total_search_events, t2.total_result_clicks,
+						case when t1.total_search_events = 0 then null
+							 else (t2.total_result_clicks / t1.total_search_events) * 100 
+							 end as clickthrough_rate
+from (
+		select user_id, count(event_name) as total_search_events
+		from users_activity_log
+		where event_name = 'run_query'
+		group by user_id
+		order by user_id asc
+	) t1
+join
+    (	
+		select user_id, count(event_name) as total_result_clicks
+		from users_activity_log
+		where event_name in ('query_result_1', 'query_result_2', 'query_result_3', 'query_result_4', 'query_result_5', 'query_result_6', 'query_result_7', 'query_result_8', 'query_result_9')
+		group by user_id
+		order by user_id asc
+	) t2 on t1.user_id = t2.user_id
+order by t1.user_id asc;
+
+select avg(clickthrough_rate) as avg_clickthrough_rate
+from
+(
+select t1.user_id, t1.total_search_events, t2.total_result_clicks,
+						case when t1.total_search_events = 0 then null
+							 else (t2.total_result_clicks / t1.total_search_events) * 100 
+							 end as clickthrough_rate
+from (
+		select user_id, count(event_name) as total_search_events
+		from users_activity_log
+		where event_name = 'run_query'
+		group by user_id
+		order by user_id asc
+	) t1
+join
+    (	
+		select user_id, count(event_name) as total_result_clicks
+		from users_activity_log
+		where event_name in ('query_result_1', 'query_result_2', 'query_result_3', 'query_result_4', 'query_result_5', 'query_result_6', 'query_result_7', 'query_result_8', 'query_result_9')
+		group by user_id
+		order by user_id asc
+	) t2 on t1.user_id = t2.user_id
+order by t1.user_id asc
+)t1_t2;
+
+-- ANSWER - Average clickthrough rate is 81.17% which means that 81.17% of the times the user is finding the desired result in the first page.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- TASK 3 Does the ordering algorithm of search results need tuning?
+
+use binghive;
+
+select avg(average_clicked_position) as avg_click_position
+from(
+select
+    user_id,
+    avg(clicked_position) as average_clicked_position
+from (
+    select user_id,
+           cast(SUBSTRING_INDEX(event_name, '_', -1) as unsigned) as clicked_position
+    from users_activity_log
+    where event_name like 'query_result_%'
+    order by user_id
+) clicked_positions
+group by user_id
+order by user_id
+) click_position;
+
+-- ANSWER - Since the average click position of any user is between 1-2, it means that ordering algorithm of search results in fine and doesnt need any tuning.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- TASK 4 & 5 Are users able to search at all? Is the search button working fine? Do users face any errors after running a search query?
+
+select (search_button_errors / search_button_clicks) * 100 as percentage_of_search_error 
+from
+(
+select
+    count(*) as search_button_clicks
+from users_activity_log
+where event_name = 'run_query'
+)clicks,
+(
+select
+    count(*) as search_button_errors
+from users_activity_log
+where event_name = 'query_result_0'
+) errors;
+
+-- ANSWER - Search button is working alright but the user encounters error 10.3% of the time when he/she tries to search for something.
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+-- TASK 6 Are the autocomplete suggestions helpful for users?
+
+select avg(auto_complete_rate) as avg_autocomplete
+from
+(
+select searches.user_id, (auto_complete_freq / search_button_clicks) * 100 as auto_complete_rate
+from
+(
+select user_id,
+    count(*) as search_button_clicks
+from users_activity_log
+where event_name = 'run_query'
+group by user_id
+) searches
+join
+(
+select user_id,
+    count(*) as auto_complete_freq
+from users_activity_log
+where event_name = 'autocomplete_engine'
+group by user_id
+) autocomps on searches.user_id = autocomps.user_id
+order by user_id
+)outer_auto;
+
+-- ANSWER - Yes, average clicks on search suggestions is 79.39% which means that 79.38% of the times when people click on search they do use the autocomplete engine.
+
+
+
